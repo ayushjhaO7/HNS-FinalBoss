@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # High-Performance Data Entry Point (Rust)
+  rust-ingestor:
+    build:
+      context: ./rust-bridge
+      dockerfile: Dockerfile
+    container_name: coldchain-rust
+    environment:
+      - MQTT_BROKER=broker.hivemq.com
+      - MQTT_PORT=1883
+      - MQTT_TOPIC=coldchain/telemetry/#
+      - DATA_DIR=/shared/data
+    volumes:
+      - ./shared/data:/shared/data
+    restart: unless-stopped
+
+  # Archival & Cloud Sync Worker (PySpark)
+  ingestion-engine:
+    build:
+      context: ./ingestion
+      dockerfile: Dockerfile
+    container_name: coldchain-ingestion
+    environment:
+      - DATA_DIR=/shared/data
+    volumes:
+      - ./shared/data:/shared/data
+    depends_on:
+      - rust-ingestor
+    restart: unless-stopped
+
+  # BI Dashboard & Forensics (R Shiny)
+  analytics-dashboard:
+    build:
+      context: ./analytics
+      dockerfile: Dockerfile
+    container_name: coldchain-analytics
+    ports:
+      - "3838:3838"
+    volumes:
+      - ./shared/data:/shared/data
+    depends_on:
+      - ingestion-engine
+    restart: unless-stopped
+
+  # -----------------------------------------------------------------------------
+  #  UNIT V: DISTRIBUTED DATABASE REPLICA SET ARCHITECTURE
+  # -----------------------------------------------------------------------------
+  
+  # Distributed Primary Node (Master)
+  mongo-primary:
+    image: mongo:6.0
+    container_name: coldchain-mongo-primary
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    restart: unless-stopped
+
+  # Distributed Secondary Node (Failover Backup)
+  mongo-secondary:
+    image: mongo:6.0
+    container_name: coldchain-mongo-secondary
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    restart: unless-stopped
+
+  # Automatic Initialization Protocol Worker
+  mongo-setup:
+    image: mongo:6.0
+    container_name: coldchain-mongo-init
+    depends_on:
+      - mongo-primary
+      - mongo-secondary
+    entrypoint: >
+      bash -c "
+      echo 'Waiting for MongoDB nodes to boot...' &&
+      sleep 10 &&
+      mongosh --host mongo-primary:27017 --eval 'rs.initiate({_id: \"rs0\", members: [{_id: 0, host: \"mongo-primary:27017\"}, {_id: 1, host: \"mongo-secondary:27017\"}]})' &&
+      echo 'DISTRIBUTED REPLICA SET FULLY INITIALIZED.' &&
+      sleep 5
+      "

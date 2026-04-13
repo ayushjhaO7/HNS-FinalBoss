@@ -1,0 +1,40 @@
+# =============================================================================
+#  FINAL AI FORENSIC DASHBOARD
+#  Cold-Chain Fleet Tracker
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # 1. Ingestion Engine (PySpark + Hybrid Cloud Bridge)
+  ingestion-engine:
+    build:
+      context: ../ingestion
+      dockerfile: Dockerfile
+    container_name: coldchain-ingestion
+    volumes:
+      - ../shared/data:/shared/data
+    restart: unless-stopped
+    networks:
+      - coldchain-net
+
+  # 2. Analytics Dashboard (R Shiny 2.0 + Forensics)
+  analytics-dashboard:
+    build:
+      context: ../analytics
+      dockerfile: Dockerfile
+    container_name: coldchain-analytics
+    ports:
+      - "3838:3838"
+    volumes:
+      - ../shared/data:/shared/data
+    depends_on:
+      - ingestion-engine
+    restart: unless-stopped
+    networks:
+      - coldchain-net
+
+networks:
+  coldchain-net:
+    driver: bridge
+    name: coldchain-network

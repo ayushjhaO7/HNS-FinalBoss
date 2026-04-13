@@ -1,0 +1,1 @@
+device_id,temp_c,humidity,shock_event,accel_x,accel_y,accel_z,latitude,longitude,timestamp,ingested_at

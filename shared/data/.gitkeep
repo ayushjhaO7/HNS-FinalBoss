@@ -1,0 +1,6 @@
+# This directory is the shared data volume for all services.
+# It will contain:
+#   - raw_telemetry.csv  (staged MQTT data)
+#   - telemetry.db       (processed SQLite database)
+# 
+# This file exists to ensure the directory is tracked by git.

@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  # The "Final Boss" Monolith (Rust + Spark + R)
+  coldchain-monolith:
+    build:
+      context: .
+      dockerfile: Dockerfile.monolithic
+    container_name: coldchain-master
+    ports:
+      - "3838:3838"
+    volumes:
+      - ./shared/data:/app/shared/data
+    restart: unless-stopped

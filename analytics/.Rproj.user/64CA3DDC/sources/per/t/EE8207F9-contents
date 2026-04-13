@@ -1,0 +1,213 @@
+library(shiny)
+library(leaflet)
+library(plotly)
+library(dplyr)
+library(lubridate)
+library(DBI)
+library(RSQLite)
+library(shinythemes)
+
+# =============================================================================
+#  FINAL AI FORENSIC DASHBOARD
+#  Cold-Chain Fleet Tracker
+# =============================================================================
+
+# Config: Path to data
+DB_PATH      <- "../shared/data/telemetry.db"
+LOCATION_LOG <- "../shared/data/fleet_location_log.csv"
+
+# -----------------------------------------------------------------------------
+#  UI SECTION
+# -----------------------------------------------------------------------------
+ui <- navbarPage(
+  theme = shinytheme("slate"),
+  title = "Cold-Chain AI Fleet Manager 2.0",
+  
+  # LIVE OVERVIEW
+  tabPanel("Live Fleet Status",
+    sidebarLayout(
+      sidebarPanel(
+        width = 3,
+        h4("Current Fleet Summary"),
+        hr(),
+        uiOutput("stat_boxes"),
+        hr(),
+        h4("Cloud Sync Health"),
+        plotlyOutput("sync_latency_gauge", height = "200px"),
+        hr(),
+        h4("Live GPS Ticker"),
+        uiOutput("live_gps_ticker")
+      ),
+      mainPanel(
+        width = 9,
+        leafletOutput("fleet_map", height = "600px")
+      )
+    )
+  ),
+  
+  # ANALYTICS TAB
+  tabPanel("AI Analytics & Trends",
+    fluidRow(
+      column(8, plotlyOutput("temp_trend_plot")),
+      column(4, plotlyOutput("road_quality_pie"))
+    ),
+    hr(),
+    h4("Fleet Critical Alert Log"),
+    helpText("Historical analysis of TinyML Shock and Spoilage triggers."),
+    tableOutput("alert_log")
+  )
+)
+
+# -----------------------------------------------------------------------------
+#  SERVER SECTION
+# -----------------------------------------------------------------------------
+server <- function(input, output, session) {
+  
+  # 1. Main Telemetry Data (Historical & Stats)
+  telemetry_data <- reactivePoll(5000, session,
+    checkFunc = function() {
+      if (file.exists(DB_PATH)) file.info(DB_PATH)$mtime else 1
+    },
+    valueFunc = function() {
+      if (!file.exists(DB_PATH)) return(data.frame())
+      
+      conn <- dbConnect(SQLite(), DB_PATH)
+      df   <- dbReadTable(conn, "telemetry")
+      dbDisconnect(conn)
+      
+      # Clean data types & AI strings
+      df %>%
+        mutate(
+          temp_c = as.numeric(temp_c),
+          ml_shock = ml_shock_prediction %in% c("true", "TRUE", "1", TRUE),
+          ml_spoil = ml_spoilage_risk %in% c("true", "TRUE", "1", TRUE),
+          timestamp = as_datetime(as.numeric(timestamp)),
+          # Calculate Cloud Sync Delay
+          sync_delay = as.numeric(difftime(as.POSIXct(processed_at), as.POSIXct(ingested_at), units="secs"))
+        )
+    }
+  )
+
+  # 2. Real-Time Location Data (Zero-Lag)
+  location_data <- reactivePoll(2000, session,
+    checkFunc = function() {
+      if (file.exists(LOCATION_LOG)) file.info(LOCATION_LOG)$mtime else 1
+    },
+    valueFunc = function() {
+      if (!file.exists(LOCATION_LOG)) return(data.frame())
+      read.csv(LOCATION_LOG)
+    }
+  )
+
+  # 3. Dashboard Stat Boxes
+  output$stat_boxes <- renderUI({
+    df <- telemetry_data()
+    if (nrow(df) == 0) return(p("Connecting to DB..."))
+    
+    tagList(
+      div(style="background:#2c3e50; padding:10px; margin-bottom:10px; border-radius:5px; border-top: 3px solid #18bc9c;",
+          h5("Active Trucks"), h2(n_distinct(df$device_id), style="color:#18bc9c; margin:0;")),
+      div(style="background:#2c3e50; padding:10px; margin-bottom:10px; border-radius:5px; border-top: 3px solid #e74c3c;",
+          h5("Total Shocks"), h2(sum(df$ml_shock), style="color:#e74c3c; margin:0;")),
+      div(style="background:#2c3e50; padding:10px; margin-bottom:10px; border-radius:5px; border-top: 3px solid #f39c12;",
+          h5("Spoilage Alerts"), h2(sum(df$ml_spoil), style="color:#f39c12; margin:0;"))
+    )
+  })
+
+  # 4. Sync Latency Gauge
+  output$sync_latency_gauge <- renderPlotly({
+    df <- telemetry_data()
+    if (nrow(df) == 0) return(NULL)
+    
+    avg_delay <- mean(df$sync_delay, na.rm=TRUE)
+    
+    plot_ly(
+      type = "indicator",
+      mode = "gauge+number",
+      value = avg_delay,
+      title = list(text = "Sync Lag (sec)", font = list(size = 14)),
+      gauge = list(
+        axis = list(range = list(NULL, 60)),
+        bar = list(color = "#18bc9c"),
+        steps = list(
+          list(range = c(0, 30), color = "rgba(24, 188, 156, 0.2)"),
+          list(range = c(30, 60), color = "rgba(231, 76, 60, 0.2)")
+        )
+      )
+    ) %>%
+      layout(paper_bgcolor='transparent', plot_bgcolor='transparent', margin=list(l=20,r=20,t=20,b=20), font=list(color='#FFF'))
+  })
+
+  # 5. Live GPS Ticker (Using real-time log)
+  output$live_gps_ticker <- renderUI({
+    loc <- location_data()
+    if (nrow(loc) == 0) return(p("GPS Syncing..."))
+    
+    latest_points <- loc %>%
+      group_by(device_id) %>%
+      filter(timestamp == max(timestamp)) %>%
+      arrange(device_id)
+    
+    ticker_ui <- lapply(1:nrow(latest_points), function(i) {
+      row <- latest_points[i, ]
+      div(style="margin-bottom:8px; font-family:monospace; border-left:3px solid #18bc9c; padding-left:10px;",
+          strong(row$device_id, style="color:#18bc9c;"), br(),
+          span(sprintf("GPS: %.4f, %.4f", row$latitude, row$longitude), style="color:#bdc3c7;")
+      )
+    })
+    do.call(tagList, ticker_ui)
+  })
+
+  # 6. Leaflet Fleet Map
+  output$fleet_map <- renderLeaflet({
+    loc <- location_data()
+    df  <- telemetry_data()
+    if (nrow(loc) == 0) return(NULL)
+    
+    latest_loc <- loc %>% group_by(device_id) %>% filter(timestamp == max(timestamp)) %>% ungroup()
+    latest_tel <- df %>% group_by(device_id) %>% filter(timestamp == max(timestamp)) %>% ungroup()
+    
+    # Merge for styling
+    map_df <- left_join(latest_loc, latest_tel, by="device_id")
+    
+    leaflet(map_df) %>%
+      addProviderTiles(providers$CartoDB.DarkMatter) %>%
+      addAwesomeMarkers(
+        lng = ~longitude.x, lat = ~latitude.x, label = ~device_id,
+        icon = awesomeIcons(icon='truck', library='fa', 
+                             markerColor=ifelse(map_df$ml_spoil | map_df$ml_shock, 'red', 'green'))
+      )
+  })
+
+  # 7. Thermal Trend Plot
+  output$temp_trend_plot <- renderPlotly({
+    df <- telemetry_data()
+    if (nrow(df) == 0) return(NULL)
+    
+    plot_ly(df, x = ~timestamp, y = ~temp_c, color = ~device_id, type = 'scatter', mode = 'lines') %>%
+      layout(title = "Multi-Truck Thermal Stability", paper_bgcolor='transparent', plot_bgcolor='transparent', font=list(color='#FFF'))
+  })
+
+  # 8. Road Quality Distribution
+  output$road_quality_pie <- renderPlotly({
+    df <- telemetry_data()
+    if (nrow(df) == 0) return(NULL)
+    
+    counts <- df %>% count(ml_road_surface)
+    plot_ly(counts, labels = ~ml_road_surface, values = ~n, type = 'pie') %>%
+      layout(title = "Fleet Road Surface Mix", paper_bgcolor='transparent', plot_bgcolor='transparent', font=list(color='#FFF'))
+  })
+  
+  # 9. Alert Log
+  output$alert_log <- renderTable({
+    telemetry_data() %>%
+      filter(ml_shock | ml_spoil) %>%
+      select(device_id, timestamp, temp_c, ml_road_surface, sync_delay) %>%
+      arrange(desc(timestamp)) %>%
+      head(10)
+  })
+}
+
+shinyApp(ui, server)
+
+

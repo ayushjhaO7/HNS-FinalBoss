@@ -1,0 +1,70 @@
+# ==========================================
+# STAGE 1: Rust Builder
+# ==========================================
+FROM rust:1.76-slim-bookworm as rust-builder
+WORKDIR /usr/src/app
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+COPY rust-bridge/Cargo.toml ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+COPY rust-bridge/src ./src
+RUN rm -f target/release/deps/coldchain_rust_bridge*
+RUN cargo build --release
+
+# ==========================================
+# STAGE 2: Master Runtime (The Monolith)
+# ==========================================
+FROM ubuntu:22.04
+
+# Avoid interaction during package install
+ENV DEBIAN_FRONTEND=noninteractive
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+
+WORKDIR /app
+
+# 1. Install Core Utilities & Runtimes (Python, Java, R, Supervisor)
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    default-jre-headless \
+    r-base \
+    libsqlite3-dev \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libfontconfig1-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    libpq-dev \
+    libsodium-dev \
+    supervisor \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Install Python Dependencies (Spark, Mongo, Pandas)
+COPY ingestion/requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# 3. Install R Dependencies
+COPY analytics/install_packages.R .
+RUN Rscript install_packages.R
+
+# 4. Prepare Application Structure
+RUN mkdir -p /app/analytics /app/ingestion /app/shared/data /app/shared/checkpoints /var/log/supervisor
+
+# 5. Copy Components
+COPY --from=rust-builder /usr/src/app/target/release/coldchain_rust_bridge /app/rust-ingestor
+COPY ingestion/ingestion.py /app/ingestion/
+COPY analytics/ /app/analytics/
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# 6. Final Configuration
+EXPOSE 3838
+VOLUME ["/app/shared/data"]
+
+# Start all services via Supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

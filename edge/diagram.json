@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "author": "Cold-Chain Logistics Tracker",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht1",
+      "top": -80,
+      "left": 200,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-mpu6050",
+      "id": "imu1",
+      "top": 100,
+      "left": 250,
+      "attrs": {}
+    },
+    {
+      "type": "board-ssd1306",
+      "id": "oled1",
+      "top": -150,
+      "left": 40,
+      "attrs": { "i2cAddress": "0x3c" }
+    }
+  ],
+  "connections": [
+    ["dht1:VCC", "esp:3V3", "red",    ["v:10", "h:40"]],
+    ["dht1:SDA", "esp:4",   "green",  ["v:20", "h:30"]],
+    ["dht1:GND", "esp:GND.2","black", ["v:30", "h:20"]],
+
+    ["imu1:VCC", "esp:3V3", "red",    ["v:10", "h:-40"]],
+    ["imu1:GND", "esp:GND.1","black", ["v:20", "h:-30"]],
+    ["imu1:SCL", "esp:22",  "yellow", ["v:30", "h:-20"]],
+    ["imu1:SDA", "esp:21",  "blue",   ["v:40", "h:-10"]],
+    
+    ["oled1:GND", "esp:GND.1", "black", ["v:10", "h:50"]],
+    ["oled1:VCC", "esp:3V3",   "red",   ["v:20", "h:60"]],
+    ["oled1:SCL", "esp:22",    "yellow",["v:30", "h:70"]],
+    ["oled1:SDA", "esp:21",    "blue",  ["v:40", "h:80"]]
+  ]
+}

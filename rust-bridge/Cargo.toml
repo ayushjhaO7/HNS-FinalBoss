@@ -1,0 +1,12 @@
+[package]
+name = "coldchain_rust_bridge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rumqttc = "0.24.0"         # High-performance MQTT Client
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"             # Precision timestamps
+anyhow = "1.0"             # Error handling
+tokio = { version = "1", features = ["full"] } # ASYNC runtime
